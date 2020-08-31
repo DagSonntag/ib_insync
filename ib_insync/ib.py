@@ -239,7 +239,7 @@ class IB:
 
     def connect(
             self, host: str = '127.0.0.1', port: int = 7497, clientId: int = 1,
-            timeout: float = 4, readonly: bool = False, account: str = ''):
+            timeout: float = 4, readonly: bool = False, account: str = '', keepPortfolioUpToDate: bool = True):
         """
         Connect to a running TWS or IB gateway application.
         After the connection is made the client is fully synchronized
@@ -258,9 +258,10 @@ class IB:
                 is raised. Set to 0 to disable timeout.
             readonly: Set to ``True`` when API is in read-only mode.
             account: Main account to receive updates for.
+            keepPortfolioUpToDate: Whether or not to request automatic updates for the portfolio(s)
         """
         return self._run(self.connectAsync(
-            host, port, clientId, timeout, readonly, account))
+            host, port, clientId, timeout, readonly, account, keepPortfolioUpToDate))
 
     def disconnect(self):
         """
@@ -1616,7 +1617,7 @@ class IB:
     async def connectAsync(
             self, host: str = '127.0.0.1', port: int = 7497,
             clientId: int = 1, timeout: float = 4, readonly: bool = False,
-            account: str = ''):
+            account: str = '', keepPortfolioUpToDate: bool = True):
 
         if self.isConnected():
             self._logger.warn('Already connected')
@@ -1640,25 +1641,27 @@ class IB:
                 except asyncio.TimeoutError:
                     self._logger.error('reqCompletedOrders timed out')
 
-            # request updates for the main account
-            accounts = self.client.getAccounts()
-            await asyncio.wait_for(
-                asyncio.gather(
-                    self.reqAccountUpdatesAsync(account or accounts[0]),
-                    self.reqPositionsAsync(),
-                    self.reqExecutionsAsync()),
-                timeout or None)
-
-            # request updates for sub-accounts, if there are not too many
-            if len(accounts) <= self.MaxSyncedSubAccounts:
+            if keepPortfolioUpToDate:
+                # request updates for the main account
+                accounts = self.client.getAccounts()
                 await asyncio.wait_for(
                     asyncio.gather(
-                        *(self.reqAccountUpdatesMultiAsync(a)
-                            for a in accounts)),
+                        self.reqAccountUpdatesAsync(account or accounts[0]),
+                        self.reqPositionsAsync(),
+                        self.reqExecutionsAsync()),
                     timeout or None)
-            else:
-                self._logger.warning('Not requesting sub-account updates')
 
+                # request updates for sub-accounts, if there are not too many
+                if len(accounts) <= self.MaxSyncedSubAccounts:
+                    await asyncio.wait_for(
+                        asyncio.gather(
+                            *(self.reqAccountUpdatesMultiAsync(a)
+                                for a in accounts)),
+                        timeout or None)
+                else:
+                    self._logger.warning('Not requesting sub-account updates')
+            else:
+                self._logger.warning('Not requesting account updates')
             # set minimum orderId
             minReqId = 1 + max((
                 trade.order.orderId for trade in self.wrapper.trades.values()
